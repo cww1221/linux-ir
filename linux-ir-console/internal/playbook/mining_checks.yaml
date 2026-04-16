@@ -1,0 +1,137 @@
+version: "1"
+title: "挖矿/矿码检测（基础版）"
+items:
+  - id: mining.ir_remediate_guide
+    name: "矿码：联动处置（只读加固采集 + 操作清单）"
+    category: "矿码处置"
+    timeoutSec: 40
+    description: "检测后一键执行：汇总主机信息、可疑路径与连接线索，并输出人工处置步骤（不自动杀进程/不删文件）。"
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "========== IR REMEDIATION CHECKLIST (read-only bundle) =========="
+      echo "### 1) 时间与主机"; date; (hostname -f 2>/dev/null || hostname); (uptime 2>/dev/null || true)
+      echo; echo "### 2) 可疑进程关键字（再次确认）"
+      (ps aux 2>/dev/null || ps -eo pid,user,%cpu,args) | egrep -i "xmrig|xmr|stratum|minerd|kdevtmpfsi|kinsing|watchdog|cryptonight" || echo "(no keyword hit in ps)"
+      echo; echo "### 3) 监听与对外连接（摘要）"
+      (ss -tulpen 2>/dev/null || true) | head -n 80
+      echo; echo "### 4) /tmp /var/tmp 近期可执行文件（仅列举）"
+      (find /tmp /var/tmp -maxdepth 3 -type f -perm -111 -mtime -14 2>/dev/null | head -n 120) || true
+      echo; echo "### 5) 人工建议（工具不代执行）"
+      echo "- 对确认恶意 PID：先记录路径与父进程，再按需 kill/stop 服务，并做镜像/内存取证后再清理。"
+      echo "- 检查 systemd/cron/rc.local 持久化，删除恶意 unit/cron 前请备份。"
+      echo "- 容器场景：docker inspect / docker diff 后再决定是否 docker stop/rm。"
+      echo "================================================================"
+
+  - id: mining.cpu_top
+    name: "矿码：高 CPU 进程与可疑命令行"
+    category: "矿码检测"
+    remediateId: mining.ir_remediate_guide
+    timeoutSec: 15
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### top cpu"; (ps aux --sort=-%cpu 2>/dev/null || ps -eo pid,ppid,user,%cpu,%mem,etime,args --sort=-%cpu) | head -n 40
+      echo; echo "### suspicious keywords"; (ps aux 2>/dev/null || ps -eo pid,ppid,user,args) | egrep -i "xmrig|xmr|monero|stratum|minerd|cpuminer|cryptonight|kdevtmpfsi|kinsing|watchdog|skid|coinhive" || true
+
+  - id: mining.net_stratum
+    name: "矿码：Stratum/矿池连接线索（ss/lsof）"
+    category: "矿码检测"
+    remediateId: mining.ir_remediate_guide
+    timeoutSec: 20
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### ss established"; (ss -antp 2>/dev/null || true) | egrep -i "stratum|:3333|:4444|:5555|:7777|:14444|:9999" || true
+      echo; echo "### lsof net"; (command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP -sTCP:ESTABLISHED 2>/dev/null | head -n 200) || true
+
+  - id: mining.persistence_cron_systemd
+    name: "矿码：常见持久化点（cron/systemd/rc.local/profile）"
+    category: "矿码检测"
+    remediateId: mining.ir_remediate_guide
+    timeoutSec: 35
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### crontab"; (crontab -l 2>/dev/null || true)
+      echo; echo "### cron dirs"; (ls -la /etc/cron* 2>/dev/null || true)
+      echo; echo "### rc.local"; (cat /etc/rc.local 2>/dev/null || true)
+      echo; echo "### profile / bashrc (system)"; (ls -la /etc/profile /etc/bash.bashrc 2>/dev/null || true)
+      echo; echo "### systemd suspicious"; (command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | egrep -i "xmr|miner|kdevtmpfsi|kinsing|watchdog" || true) || true
+
+  - id: mining.files_tmp
+    name: "矿码：临时目录/隐藏文件/可疑权限"
+    category: "矿码检测"
+    remediateId: mining.ir_remediate_guide
+    timeoutSec: 45
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### suspicious in /tmp /var/tmp"; (ls -la /tmp /var/tmp 2>/dev/null || true)
+      echo; echo "### recent executables in tmp"; (find /tmp /var/tmp -maxdepth 2 -type f -perm -111 -mtime -7 2>/dev/null | head -n 200) || true
+      echo; echo "### world-writable executables (limited)"; (find / -xdev -type f -perm -0002 -perm -111 2>/dev/null | head -n 200) || true
+
+  - id: mining.container
+    name: "矿码：Docker/容器线索（容器/镜像/可疑命令）"
+    category: "矿码检测"
+    remediateId: mining.ir_remediate_guide
+    timeoutSec: 35
+    command: |
+      set -o pipefail 2>/dev/null || true
+      if command -v docker >/dev/null 2>&1; then
+        echo "### docker ps"; docker ps --no-trunc 2>/dev/null || true
+        echo; echo "### docker images"; docker images 2>/dev/null || true
+        echo; echo "### docker top (first 3 containers)"; docker ps -q 2>/dev/null | head -n 3 | while read -r c; do echo "## $c"; docker top "$c" -eo pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true; done
+      else
+        echo "docker not found"
+      fi
+
+  - id: mining.guard_analysis
+    name: "矿码：路径守护/占用分析（删不掉时先用）"
+    category: "矿码处置"
+    timeoutSec: 150
+    description: "对指定绝对路径：lsof/fuser、systemd、cron、lsattr，末尾 ###11 输出可复制的 kill/rm 顺序。侧栏「守护分析」或此处改变量 target。"
+    vars:
+      target: "/tmp/suspicious"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      T="{{.target}}"
+      echo "（与界面「守护分析」一致；可改 target；末尾 ###11 为删除步骤）"
+      echo "========== 矿码路径：守护/占用分析 =========="
+      echo "目标: $T"
+      echo
+      echo "### 1) 路径"; ls -la "$T" 2>&1
+      echo "### 2) lsof 路径"; command -v lsof >/dev/null && lsof "$T" 2>/dev/null | head -n 60
+      echo "### 2b) /proc/<PID>/exe"; for pid in $(ps auxww 2>/dev/null | grep -F "$T" | grep -v grep | awk '{print $2}' | sort -u); do [ -n "$pid" ] && [ -e "/proc/$pid/exe" ] && echo "PID=$pid exe=$(readlink -f /proc/$pid/exe 2>/dev/null || readlink /proc/$pid/exe)"; done
+      echo "### lsof +D"; [ -d "$T" ] && (command -v timeout >/dev/null && timeout 40 lsof +D "$T" 2>/dev/null || lsof +D "$T" 2>/dev/null) | head -n 80
+      echo "### fuser"; command -v fuser >/dev/null && fuser -v "$T" 2>&1 | head -n 40
+      echo "### ps 匹配"; ps auxww 2>/dev/null | grep -F "$T" | grep -v grep | head -n 40
+      echo "### lsof 全表 grep"; lsof 2>/dev/null | grep -F "$T" | head -n 60
+      echo "### systemd grep"; for d in /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system; do [ -d "$d" ] && grep -rIl "$T" "$d" 2>/dev/null | head -n 25; done
+      echo "### cron"; grep -rIl "$T" /etc/cron* /var/spool/cron /etc/crontab 2>/dev/null | head -n 20
+      echo "### lsattr"; lsattr -d "$T" 2>/dev/null; [ -d "$T" ] && lsattr -a "$T" 2>/dev/null | head -n 20; [ -f "$T" ] && lsattr "$T" 2>/dev/null
+      echo "### 11) 【删除方法】自动生成命令（核对 PID 后复制）"
+      PIDS=$(ps auxww 2>/dev/null | grep -F "$T" | grep -v grep | awk '{print $2}' | sort -u)
+      if command -v pgrep >/dev/null 2>&1; then PG=$(pgrep -f "$T" 2>/dev/null | tr '\n' ' '); PIDS=$(echo "$PIDS $PG" | tr ' ' '\n' | grep -v '^$' | sort -nu | tr '\n' ' '); fi
+      echo "# 第一步：结束进程"
+      if [ -z "$(echo $PIDS | tr -d ' ')" ]; then echo "# 未解析到 PID，请从上方 ps/lsof 手工抄 PID"; else for pid in $PIDS; do [ -n "$pid" ] && echo "kill -15 $pid"; done; echo "sleep 2"; for pid in $PIDS; do [ -n "$pid" ] && echo "kill -9 $pid"; done; fi
+      echo "# 第二步：确认无进程后"
+      echo "ps auxww | grep -F \"$T\" | grep -v grep || echo '(无匹配，可继续 rm)'"
+      echo "# 第三步：删文件"
+      echo "rm -f \"$T\" \"${T}.pid\""
+      echo "# rm 失败时: chattr -i 后重试"
+
+  - id: mining.remediate_pkill_common
+    name: "矿码处置：pkill 常见挖矿进程名（高风险）"
+    category: "矿码处置"
+    timeoutSec: 30
+    description: "对进程命令行匹配常见矿工程序名执行 pkill -f（可能误杀）。优先使用侧栏「PID 精确信号」或先在终端确认 PID。"
+    command: |
+      set +e
+      echo "### 警告：即将尝试结束常见挖矿相关进程（pkill -f）"
+      NAMES="xmrig minerd cpuminer kdevtmpfsi kinsing stratum"
+      for n in $NAMES; do
+        if command -v pkill >/dev/null 2>&1; then
+          pkill -f "$n" 2>/dev/null && echo "pkill -f $n: tried" || true
+        fi
+      done
+      sleep 1
+      echo "### 剩余可疑 ps（摘要）"
+      ps aux 2>/dev/null | egrep -i "xmrig|minerd|stratum|kdevtmpfsi|kinsing" | grep -v egrep || echo "(no match)"
+

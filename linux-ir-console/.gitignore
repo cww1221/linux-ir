@@ -1,0 +1,23 @@
+# 构建产物
+build/
+frontend/dist
+frontend/node_modules
+*.exe
+*.dll
+*.rar
+*.zip
+*.7z
+
+# 本地 / 密钥（切勿提交）
+.env
+.env.*
+*.pem
+id_rsa*
+
+# IDE
+.idea/
+.vscode/*.log
+
+# 离线工具源码（独立 git 仓库，不纳入本仓库；需要时自行 clone）
+tools/aide/
+tools/rkhunter/

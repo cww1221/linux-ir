@@ -1,0 +1,70 @@
+version: "1"
+title: "Linux 全量应急响应（基础版）"
+items:
+  - id: sys.uname
+    name: "系统信息：uname/发行版/内核"
+    category: "系统"
+    timeoutSec: 10
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### uname"; uname -a
+      echo; echo "### os-release"; (cat /etc/os-release 2>/dev/null || true)
+      echo; echo "### uptime"; uptime || true
+
+  - id: acct.users
+    name: "账号：/etc/passwd & 最近登录"
+    category: "账号与权限"
+    timeoutSec: 20
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### passwd"; cat /etc/passwd
+      echo; echo "### shadow (if allowed)"; (sudo -n cat /etc/shadow 2>/dev/null || true)
+      echo; echo "### last"; (last -a | head -n 50 2>/dev/null || true)
+
+  - id: proc.topcpu
+    name: "进程：CPU 最高 TOP"
+    category: "进程"
+    timeoutSec: 10
+    command: |
+      (ps aux --sort=-%cpu 2>/dev/null || ps -eo pid,ppid,user,%cpu,%mem,etime,args --sort=-%cpu) | head -n 30
+
+  - id: net.connections
+    name: "网络：连接/监听端口"
+    category: "网络"
+    timeoutSec: 15
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### ss"; (ss -tulpen 2>/dev/null || true)
+      echo; echo "### established"; (ss -antp 2>/dev/null || true) | head -n 200
+      echo; echo "### ip a"; (ip a 2>/dev/null || ifconfig -a 2>/dev/null || true)
+
+  - id: persistence.cron
+    name: "持久化：计划任务与 cron 目录"
+    category: "持久化"
+    timeoutSec: 25
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### crontab -l"; (crontab -l 2>/dev/null || true)
+      echo; echo "### /etc/crontab"; (cat /etc/crontab 2>/dev/null || true)
+      echo; echo "### cron dirs"; (ls -la /etc/cron* 2>/dev/null || true)
+
+  - id: persistence.systemd
+    name: "持久化：systemd 可疑服务/定时器"
+    category: "持久化"
+    timeoutSec: 25
+    command: |
+      set -o pipefail 2>/dev/null || true
+      (command -v systemctl >/dev/null 2>&1 && \
+        (echo "### enabled services"; systemctl list-unit-files --type=service --state=enabled 2>/dev/null | head -n 200; \
+         echo; echo "### timers"; systemctl list-timers --all 2>/dev/null | head -n 200)) || \
+        echo "systemd/systemctl not found"
+
+  - id: logs.auth
+    name: "日志：认证相关（auth/secure/journal）"
+    category: "日志"
+    timeoutSec: 30
+    command: |
+      set -o pipefail 2>/dev/null || true
+      echo "### auth/secure tail"; (tail -n 200 /var/log/auth.log 2>/dev/null || tail -n 200 /var/log/secure 2>/dev/null || true)
+      echo; echo "### journal ssh (if available)"; (journalctl -u ssh -n 200 --no-pager 2>/dev/null || journalctl -u sshd -n 200 --no-pager 2>/dev/null || true)
+

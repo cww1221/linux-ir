@@ -1,0 +1,24 @@
+html {
+  background-color: #02040a;
+  text-align: left;
+  color: #e8f0ff;
+}
+
+body {
+  margin: 0;
+  color: #e8f0ff;
+  font-family:
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Roboto",
+    "Oxygen",
+    "Ubuntu",
+    sans-serif;
+}
+
+#root {
+  height: 100vh;
+  text-align: left;
+}

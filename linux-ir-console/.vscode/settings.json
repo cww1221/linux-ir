@@ -1,0 +1,6 @@
+{
+  "go.buildTags": "dev",
+  "gopls": {
+    "buildFlags": ["-tags=dev"]
+  }
+}

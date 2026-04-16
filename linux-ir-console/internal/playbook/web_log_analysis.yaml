@@ -1,0 +1,55 @@
+version: "1"
+title: "Web 日志分析（快速统计）"
+items:
+  - id: weblog.nginx_access_top
+    name: "Nginx access：Top IP/URI/状态码（默认路径）"
+    category: "Web 日志分析"
+    timeoutSec: 60
+    vars:
+      LogPath: "/var/log/nginx/access.log"
+    command: |
+      set -o pipefail 2>/dev/null || true
+      LOG="{{.LogPath}}"
+      if [ ! -f "$LOG" ]; then echo "log not found: $LOG"; exit 2; fi
+      echo "### file"; ls -lah "$LOG" || true
+      echo; echo "### top ip"; awk '{print $1}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### top uri"; awk '{print $7}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### status codes"; awk '{print $9}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### suspicious patterns"; egrep -i "union\\+select|/\\.\\.|%2e%2e|etc/passwd|cmd=|base64,|eval\\(|/wp-admin|/phpmyadmin|\\.git|\\.env" "$LOG" | head -n 200 || true
+
+  - id: weblog.apache_access_top
+    name: "Apache access：Top IP/URI/状态码（默认路径）"
+    category: "Web 日志分析"
+    timeoutSec: 60
+    vars:
+      LogPath: "/var/log/apache2/access.log"
+    command: |
+      set -o pipefail 2>/dev/null || true
+      LOG="{{.LogPath}}"
+      if [ ! -f "$LOG" ]; then LOG="/var/log/httpd/access_log"; fi
+      if [ ! -f "$LOG" ]; then echo "log not found: $LOG"; exit 2; fi
+      echo "### file"; ls -lah "$LOG" || true
+      echo; echo "### top ip"; awk '{print $1}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### top uri"; awk '{print $7}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### status codes"; awk '{print $9}' "$LOG" | sort | uniq -c | sort -nr | head -n 20
+      echo; echo "### suspicious patterns"; egrep -i "union\\+select|/\\.\\.|%2e%2e|etc/passwd|cmd=|base64,|eval\\(|/wp-admin|/phpmyadmin|\\.git|\\.env" "$LOG" | head -n 200 || true
+
+  - id: weblog.tomcat_errors
+    name: "Tomcat：catalina/应用错误与疑似 webshell 线索"
+    category: "Web 日志分析"
+    timeoutSec: 60
+    vars:
+      LogPath: "/var/log/tomcat/catalina.out"
+    command: |
+      set -o pipefail 2>/dev/null || true
+      LOG="{{.LogPath}}"
+      if [ ! -f "$LOG" ]; then
+        for p in /var/log/tomcat*/catalina.out /opt/tomcat*/logs/catalina.out; do
+          if [ -f "$p" ]; then LOG="$p"; break; fi
+        done
+      fi
+      if [ ! -f "$LOG" ]; then echo "log not found"; exit 2; fi
+      echo "### file"; ls -lah "$LOG" || true
+      echo; echo "### tail"; tail -n 300 "$LOG" || true
+      echo; echo "### keywords"; egrep -i "webshell|cmd=|Runtime\\.getRuntime\\(|ProcessBuilder|javax\\.script|/manager/html|whoami|curl\\s|wget\\s|base64|eval\\(" "$LOG" | tail -n 200 || true
+
