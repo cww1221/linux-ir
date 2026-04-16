@@ -282,3 +282,36 @@ wails generate module
 ## 更新记录（文档）
 
 - 文档随功能迭代更新；若与界面不一致，以 **当前代码与界面** 为准。
+
+---
+
+## 推送到 GitHub（自行完成最后一步）
+
+我无法代替你登录 GitHub，但本地仓库已可提交。仓库根目录为 **`linux-ir-console` 的上级目录**（即包含子文件夹 `linux-ir-console/` 的那一层），当前默认分支为 **`master`**。
+
+1. 打开 [GitHub](https://github.com) → **New repository**，仓库名例如 `linux-ir-console`，**不要**勾选「自动添加 README」（避免与本地冲突），创建空仓库。
+
+2. 在本机 PowerShell 中执行（将 `你的用户名` 换成你的 GitHub 用户名；若默认分支是 `main`，见下方说明）：
+
+```powershell
+cd C:\Users\cww1221\Projects\linux-ir-console
+git remote add origin https://github.com/你的用户名/linux-ir-console.git
+git push -u origin master
+```
+
+若 GitHub 新建仓库默认分支为 **`main`**，可执行：
+
+```powershell
+git push -u origin master:main
+```
+
+3. **首次推送**若提示登录：可使用 **GitHub CLI**（`gh auth login`）、**Personal Access Token**（HTTPS 密码处填 Token），或配置 **SSH 公钥** 后改用 `git@github.com:你的用户名/linux-ir-console.git`。
+
+4. 若尚未配置全局 Git 用户名/邮箱，建议执行（邮箱可用 GitHub 提供的 `noreply` 地址）：
+
+```powershell
+git config --global user.name "你的名字"
+git config --global user.email "你的邮箱@example.com"
+```
+
+**说明**：`tools/aide/`、`tools/rkhunter/` 为独立克隆的仓库，已写入 `.gitignore`，不会进入本仓库；需要时请自行在对应目录 `git clone`。
