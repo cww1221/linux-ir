@@ -7,7 +7,7 @@
 ## 目录结构
 
 ```
-linux-ir-console/
+./
 ├── main.go                 # Wails 入口
 ├── app.go                  # 核心 App：SSH、Shell、剧本执行
 ├── app_ext.go              # SFTP、本地目录、Shadow 破解、转发等扩展 API
@@ -287,7 +287,7 @@ wails generate module
 
 ## 推送到 GitHub（自行完成最后一步）
 
-我无法代替你登录 GitHub，但本地仓库已可提交。仓库根目录为 **`linux-ir-console` 的上级目录**（即包含子文件夹 `linux-ir-console/` 的那一层），当前默认分支为 **`master`**。
+我无法代替你登录 GitHub，但本地仓库已可提交。仓库根目录为本 `README.md` 所在目录（当前默认分支为 **`master`**）。
 
 1. 打开 [GitHub](https://github.com) → **New repository**，仓库名例如 `linux-ir-console`，**不要**勾选「自动添加 README」（避免与本地冲突），创建空仓库。
 
