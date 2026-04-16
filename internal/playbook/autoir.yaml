@@ -1,0 +1,205 @@
+version: "1"
+title: "AutoIR（应急响应自动化）"
+items:
+  - id: autoir.hijack_env
+    name: "环境变量劫持排查（PATH/LD_PRELOAD/PROMPT_COMMAND）"
+    category: "AutoIR"
+    timeoutSec: 40
+    description: "参考 AutoIR HijackAnalysis：扫描常见 profile/bashrc 文件中导出的敏感环境变量，重点关注 PATH/LD_PRELOAD/PROMPT_COMMAND。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### 环境变量劫持排查（AutoIR HijackAnalysis 思路）"
+      echo
+      FILES="/root/.bashrc /root/.bash_profile /etc/profile /etc/bashrc /etc/environment"
+      for f in $FILES; do
+        [ -f "$f" ] || continue
+        echo "## $f"
+        egrep -nI '^\s*export\s+(PATH|LD_PRELOAD|LD_LIBRARY_PATH|PROMPT_COMMAND)\s*=' "$f" 2>/dev/null || true
+        echo
+      done
+      if [ -d /etc/profile.d ]; then
+        echo "## /etc/profile.d/*"
+        for f in /etc/profile.d/*; do
+          [ -f "$f" ] || continue
+          egrep -nI '^\s*export\s+(PATH|LD_PRELOAD|LD_LIBRARY_PATH|PROMPT_COMMAND)\s*=' "$f" 2>/dev/null \
+            | sed "s#^#${f}:#"
+        done
+      fi
+
+  - id: autoir.user_basics
+    name: "恶意用户排查（home/passwd/shadow/sudoers/authorized_keys）"
+    category: "AutoIR"
+    timeoutSec: 60
+    needsRoot: true
+    description: "参考 AutoIR UserAnalysis：枚举 home 用户、可登录 shell、UID/GID=0、空口令、sudoers 特权、authorized_keys 免密。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### home 目录用户"
+      ls -la /home 2>/dev/null || true
+      echo
+
+      echo "### /etc/passwd 异常（可登录 shell / UID=0 / GID=0）"
+      awk -F: '($7 !~ /(nologin|false)$/ && $1!="root"){print "shell_user:",$1,$7} ($3==0 && $1!="root"){print "uid0_user:",$1} ($4==0 && $1!="root"){print "gid0_user:",$1}' /etc/passwd 2>/dev/null || true
+      echo
+
+      echo "### /etc/shadow 空口令用户"
+      awk -F: 'length($2)==0{print "empty_password:",$1}' /etc/shadow 2>/dev/null || true
+      echo
+
+      echo "### sudoers 特权条目（ALL=(ALL)）"
+      egrep -nI '^[^#].*\bALL=\(ALL\)\b' /etc/sudoers 2>/dev/null || true
+      if [ -d /etc/sudoers.d ]; then
+        for f in /etc/sudoers.d/*; do
+          [ -f "$f" ] || continue
+          egrep -nI '^[^#].*\bALL=\(ALL\)\b' "$f" 2>/dev/null | sed "s#^#${f}:#"
+        done
+      fi
+      echo
+
+      echo "### authorized_keys 存在情况（仅提示路径）"
+      for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+        [ -f "$f" ] && echo "$f"
+      done
+
+  - id: autoir.proc_suspicious
+    name: "恶意进程排查（高 CPU/MEM/隐藏PID/可疑执行/命令替换）"
+    category: "AutoIR"
+    timeoutSec: 80
+    needsRoot: true
+    description: "参考 AutoIR ProcAnalysis：找高占用、可疑反弹/下载执行、/proc 与 ps 不一致、/proc/<pid>/exe 与命令名不一致。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### 1) 高 CPU/MEM（>50%）"
+      ps -eo pid,ppid,user,%cpu,%mem,tty,etime,args --sort=-%cpu 2>/dev/null | awk 'NR==1 || ($4+0>50 || $5+0>50){print}' | head -n 60
+      echo
+
+      echo "### 2) 可疑执行（反弹/下载执行/解释器拉远端）"
+      SUS='(bash\s+-i|/dev/tcp/|nc\s+|ncat\s+|telnet\s+|curl\s+.*\|\s*(sh|bash)|wget\s+.*\|\s*(sh|bash)|python\s+-c|perl\s+-e|base64_decode|b64decode|gzinflate|eval\()'
+      ps auxww 2>/dev/null | egrep -i "$SUS" | head -n 80 || true
+      echo
+
+      echo "### 3) 隐藏 PID（/proc 里有但 ps 没有）"
+      (ls /proc 2>/dev/null | egrep '^[0-9]+$' | sort -n > /tmp/.autoir_proc_p 2>/dev/null) || true
+      (ps -e -o pid= 2>/dev/null | tr -d ' ' | sort -n > /tmp/.autoir_proc_ps 2>/dev/null) || true
+      if [ -s /tmp/.autoir_proc_p ] && [ -s /tmp/.autoir_proc_ps ]; then
+        comm -23 /tmp/.autoir_proc_p /tmp/.autoir_proc_ps | head -n 50 | sed 's/^/hidden_pid: /' || true
+      fi
+      rm -f /tmp/.autoir_proc_p /tmp/.autoir_proc_ps 2>/dev/null || true
+      echo
+
+      echo "### 4) /proc/<pid>/exe 与命令名不一致（命令替换线索）"
+      for pid in $(ps -e -o pid= 2>/dev/null | head -n 500); do
+        pid="$(echo "$pid" | tr -d ' ')"
+        [ -z "$pid" ] && continue
+        [ -e "/proc/$pid/exe" ] || continue
+        exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+        cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | awk '{print $1}' )"
+        [ -z "$exe" ] && continue
+        bn1="$(basename "$exe" 2>/dev/null)"
+        bn2="$(basename "$cmd" 2>/dev/null)"
+        if [ -n "$bn2" ] && [ "$bn1" != "$bn2" ]; then
+          echo "pid=$pid exe=$exe cmd=$cmd"
+        fi
+      done | head -n 80
+
+  - id: autoir.net_basics
+    name: "网络排查（ss/网卡/hosts）"
+    category: "AutoIR"
+    timeoutSec: 60
+    needsRoot: true
+    description: "参考 AutoIR NetAnalysis：列出连接与监听端口、网卡、/etc/hosts 异常条目。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### 1) ss -anutp（连接/监听）"
+      ss -anutp 2>/dev/null | head -n 200 || true
+      echo
+      echo "### 2) 网卡列表"
+      ls /sys/class/net 2>/dev/null || true
+      echo
+      echo "### 3) /etc/hosts（非注释行）"
+      egrep -n '^[^#[:space:]]' /etc/hosts 2>/dev/null || true
+
+  - id: autoir.backdoor_persistence
+    name: "后门/持久化排查（ld.so.preload/cron/sshd/startup/SUID）"
+    category: "AutoIR"
+    timeoutSec: 120
+    needsRoot: true
+    description: "参考 AutoIR BackdoorAnalysis：检查 ld.so.preload、cron、sshd 劫持、启动项、SUID。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### 1) /etc/ld.so.preload"
+      if [ -f /etc/ld.so.preload ]; then
+        egrep -n '^[^#[:space:]]' /etc/ld.so.preload 2>/dev/null || true
+      else
+        echo "(not found)"
+      fi
+      echo
+
+      echo "### 2) cron 可疑命令（bash/curl/wget/nc/dev/tcp/base64）"
+      PAT='(bash\\s+-i|/dev/tcp/|curl\\s+|wget\\s+|nc\\s+|ncat\\s+|base64|b64decode|python\\s+-c|perl\\s+-e)'
+      for d in /var/spool/cron /etc/cron.d /etc/cron.daily /etc/cron.weekly /etc/cron.hourly /etc/cron.monthly; do
+        [ -d "$d" ] || continue
+        echo "## $d"
+        egrep -RIn --binary-files=without-match "$PAT" "$d" 2>/dev/null | head -n 80 || true
+        echo
+      done
+
+      echo "### 3) sshd 是否为软链接"
+      ls -la /usr/sbin/sshd 2>/dev/null || true
+      echo
+
+      echo "### 4) 启动项可疑命令（systemd/init.d/rc.local）"
+      for d in /etc/init.d /etc/rc.d /etc/systemd/system /usr/lib/systemd/system /lib/systemd/system /usr/local/etc/rc.d /etc/profile.d; do
+        [ -d "$d" ] || continue
+        egrep -RIn --binary-files=without-match "$PAT" "$d" 2>/dev/null | head -n 60 || true
+      done
+      for f in /etc/rc.local /etc/inittab /etc/profile /etc/bashrc; do
+        [ -f "$f" ] && egrep -n "$PAT" "$f" 2>/dev/null || true
+      done
+      echo
+
+      echo "### 5) SUID 文件（前 120 条）"
+      find / -xdev -type f -perm -4000 2>/dev/null | head -n 120 || true
+
+  - id: autoir.log_auth
+    name: "登录日志排查（last/lastb 摘要）"
+    category: "AutoIR"
+    timeoutSec: 45
+    needsRoot: true
+    description: "参考 AutoIR LogAnalysis：统计 last/lastb 中的来源 IP 次数，辅助爆破/异常登录定位。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### last（成功登录，按来源计数）"
+      last 2>/dev/null | awk '{print $3}' | egrep '^[0-9]+\\.' | sort | uniq -c | sort -nr | head -n 30 || true
+      echo
+      echo "### lastb（失败登录，按来源计数）"
+      lastb 2>/dev/null | awk '{print $3}' | egrep '^[0-9]+\\.' | sort | uniq -c | sort -nr | head -n 30 || true
+
+  - id: autoir.log_web_suspicious
+    name: "Web 日志快速可疑请求（本地规则）"
+    category: "AutoIR"
+    timeoutSec: 80
+    description: "参考 AutoIR LogAnalysis：不依赖雷池 WAF，仅用本地关键词/正则从 access.log 中抓常见攻击与命令执行片段。"
+    vars:
+      AccessLog: "/var/log/apache2/access.log"
+      MaxLines: "20000"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      LOG="{{.AccessLog}}"
+      MAX="{{.MaxLines}}"
+      echo "### access log suspicious scan"
+      echo "log=$LOG maxLines=$MAX"
+      echo
+      if [ ! -f "$LOG" ]; then
+        echo "log not found: $LOG"
+        exit 2
+      fi
+      PAT='(\\?|%3[bB]|%3[dD]|%2[fF]|\\b(select|union|sleep\\(|benchmark\\(|load_file\\(|into\\s+outfile)\\b|\\b(cmd|command)=|/etc/passwd|\\.\\./|\\b(base64_decode|gzinflate|eval\\(|bash\\s+-i|/dev/tcp/|nc\\s+|curl\\s+|wget\\s+)\\b)'
+      tail -n "$MAX" "$LOG" 2>/dev/null | egrep -nI "$PAT" | head -n 200 || true

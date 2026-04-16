@@ -1,0 +1,93 @@
+version: "1"
+title: "离线：系统命令篡改校验/修复"
+items:
+  - id: integrity.verify_pkgdb
+    name: "离线校验：包数据库校验系统命令（dpkg -V / rpm -V）"
+    category: "离线校验/修复"
+    timeoutSec: 180
+    needsRoot: true
+    description: "无需联网：Debian/Ubuntu 用 dpkg -V；RHEL/CentOS 用 rpm -V。用于快速发现 coreutils、openssh、sudo 等命令被篡改。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      echo "### 离线校验：包数据库验证（dpkg -V / rpm -V）"
+      echo
+      if command -v dpkg >/dev/null 2>&1; then
+        echo "Detected: dpkg (Debian/Ubuntu)"
+        PKGS="coreutils openssh-server openssh-client sudo bash dash util-linux procps"
+        for p in $PKGS; do
+          dpkg -s "$p" >/dev/null 2>&1 || continue
+          echo
+          echo "## dpkg -V $p"
+          dpkg -V "$p" 2>/dev/null | head -n 200 || true
+        done
+        echo
+        echo "提示：dpkg -V 输出行非空通常表示该包内文件被改/权限变更（需结合包重装/比对确认）。"
+        exit 0
+      fi
+      if command -v rpm >/dev/null 2>&1; then
+        echo "Detected: rpm (RHEL/CentOS/Rocky/Alma)"
+        PKGS="coreutils openssh-server openssh-clients sudo bash util-linux procps-ng"
+        for p in $PKGS; do
+          rpm -q "$p" >/dev/null 2>&1 || continue
+          echo
+          echo "## rpm -V $p"
+          rpm -V "$p" 2>/dev/null | head -n 200 || true
+        done
+        echo
+        echo "提示：rpm -V 输出行非空通常表示该包内文件被改/权限变更（需结合包重装/比对确认）。"
+        exit 0
+      fi
+      echo "未检测到 dpkg/rpm：可能是极简系统/容器/自编译环境。可改用 AIDE 或手工对比（需基线）。"
+      exit 2
+
+  - id: integrity.offline_install_pkg
+    name: "离线修复：安装/替换本地上传的包（.deb/.rpm）"
+    category: "离线校验/修复"
+    timeoutSec: 300
+    needsRoot: true
+    vars:
+      PkgPath: "/tmp/ir-packages/coreutils.deb"
+      ForceNodeps: "false"
+    description: "先用工具 SFTP 上传 .deb/.rpm 到远端，再填入 PkgPath 执行离线安装（可能需要依赖）。ForceNodeps=true 会尝试跳过依赖（高风险）。"
+    command: |
+      set +e
+      export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+      P="{{.PkgPath}}"
+      FORCE="{{.ForceNodeps}}"
+      echo "### 离线修复：安装/替换包"
+      echo "pkg=$P forceNodeps=$FORCE"
+      echo
+      if [ -z "$P" ] || [ ! -f "$P" ]; then
+        echo "PkgPath not found: $P"
+        exit 2
+      fi
+
+      case "$P" in
+        *.deb)
+          if ! command -v dpkg >/dev/null 2>&1; then
+            echo "dpkg not found, but pkg is .deb"
+            exit 2
+          fi
+          echo "## dpkg -i"
+          dpkg -i "$P" 2>&1 | head -n 220
+          echo
+          echo "提示：若提示依赖缺失，需要你离线把依赖包也上传后一起 dpkg -i，或在有网环境 apt-get -f install。"
+          ;;
+        *.rpm)
+          if ! command -v rpm >/dev/null 2>&1; then
+            echo "rpm not found, but pkg is .rpm"
+            exit 2
+          fi
+          echo "## rpm -Uvh --replacepkgs"
+          if [ "$FORCE" = "true" ]; then
+            rpm -Uvh --replacepkgs --nodeps "$P" 2>&1 | head -n 220
+          else
+            rpm -Uvh --replacepkgs "$P" 2>&1 | head -n 220
+          fi
+          ;;
+        *)
+          echo "Unsupported package type: $P (need .deb or .rpm)"
+          exit 2
+          ;;
+      esac

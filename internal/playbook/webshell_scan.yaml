@@ -1,0 +1,61 @@
+version: "1"
+title: "WebShell 查找（PHP/JSP）"
+items:
+  - id: webshell.scan_php_jsp
+    name: "一键查找 WebShell（PHP/JSP/JSX）"
+    category: "WebShell 查找"
+    timeoutSec: 300
+    vars:
+      Root: "/var/www"
+      Days: "30"
+      MaxSizeKB: "256"
+    command: |
+      set -o pipefail 2>/dev/null || true
+      ROOT="{{.Root}}"
+      DAYS="{{.Days}}"
+      MAXKB="{{.MaxSizeKB}}"
+      MAXSIZE="${MAXKB}k"
+      if [ -z "$ROOT" ]; then echo "Root is empty"; exit 2; fi
+      if [ ! -d "$ROOT" ]; then echo "Root not found/ not a dir: $ROOT"; exit 2; fi
+
+      echo "### WebShell scan"
+      echo "root=$ROOT days=$DAYS maxSizeKB=$MAXKB"
+      echo
+
+      echo "### 1) Recent small php/jsp files (mtime)"
+      find "$ROOT" -xdev -type f \( -iname "*.php" -o -iname "*.phtml" -o -iname "*.php[0-9]" -o -iname "*.jsp" -o -iname "*.jspx" \) \
+        -size -"${MAXSIZE}" -mtime -"${DAYS}" -print 2>/dev/null | head -n 400 || true
+      echo
+
+      echo "### 2) Suspicious keywords (PHP)"
+      PHP_PAT='(eval\s*\(|assert\s*\(|base64_decode\s*\(|gzinflate\s*\(|str_rot13\s*\(|shell_exec\s*\(|system\s*\(|passthru\s*\(|exec\s*\(|popen\s*\(|proc_open\s*\(|curl_exec\s*\(|preg_replace\s*\(.*/e|create_function\s*\(|chr\s*\(|\$_(GET|POST|REQUEST)\s*\[)'
+      find "$ROOT" -xdev -type f \( -iname "*.php" -o -iname "*.phtml" -o -iname "*.php[0-9]" \) -size -"${MAXSIZE}" -print0 2>/dev/null \
+        | xargs -0 -r egrep -nI --color=never -i "$PHP_PAT" 2>/dev/null | head -n 500 || true
+      echo
+
+      echo "### 3) Suspicious keywords (JSP/Java)"
+      JSP_PAT='(Runtime\.getRuntime\(\)\.exec|ProcessBuilder\s*\(|javax\.script\.ScriptEngineManager|ClassLoader|defineClass|Base64\.getDecoder\(\)|new\s+String\(.+Base64|/manager/html|\b(cmd|command|exec)\b\s*=)'
+      find "$ROOT" -xdev -type f \( -iname "*.jsp" -o -iname "*.jspx" \) -size -"${MAXSIZE}" -print0 2>/dev/null \
+        | xargs -0 -r egrep -nI --color=never -i "$JSP_PAT" 2>/dev/null | head -n 500 || true
+      echo
+
+      echo "### 4) Very common webshell file names"
+      find "$ROOT" -xdev -type f \( -iname "shell.php" -o -iname "cmd.php" -o -iname "c99.php" -o -iname "r57.php" -o -iname "wso.php" -o -iname "adminer.php" -o -iname "*.php.jpg" -o -iname "*.php.png" -o -iname "*.jsp.jpg" -o -iname "*.jsp.png" \) \
+        -print 2>/dev/null | head -n 400 || true
+      echo
+
+      echo "### 5) Hash/size/mtime (top 50 recent candidates)"
+      # Collect recent candidates; fallback if stat options differ
+      CANDS="$(find "$ROOT" -xdev -type f \( -iname "*.php" -o -iname "*.phtml" -o -iname "*.php[0-9]" -o -iname "*.jsp" -o -iname "*.jspx" \) -size -"${MAXSIZE}" -mtime -"${DAYS}" -print 2>/dev/null | head -n 50)"
+      if [ -n "$CANDS" ]; then
+        echo "$CANDS" | while read -r f; do
+          [ -z "$f" ] && continue
+          SZ="$( (stat -c %s \"$f\" 2>/dev/null || stat -f %z \"$f\" 2>/dev/null || wc -c <\"$f\" 2>/dev/null) | head -n 1 )"
+          MT="$( (stat -c %y \"$f\" 2>/dev/null || stat -f %Sm \"$f\" 2>/dev/null || true) | head -n 1 )"
+          H="$( (sha256sum \"$f\" 2>/dev/null || shasum -a 256 \"$f\" 2>/dev/null || md5sum \"$f\" 2>/dev/null || true) | awk '{print $1}' | head -n 1 )"
+          echo "$H  $SZ  $MT  $f"
+        done
+      else
+        echo "(no recent small candidates found)"
+      fi
+
